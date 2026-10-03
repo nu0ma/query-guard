@@ -10,16 +10,9 @@ A guard rail for SQL in Claude Code. Before Claude runs a destructive or slow-lo
 ![Dependencies: none](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 
+<img src="docs/dialog.png" alt="query-guard asking whether to run a DELETE without WHERE, with Cancel as the first option" width="800">
+
 </div>
-
-```text
-Claude wants to run:  psql -c "DELETE FROM users"
-
-  [query-guard] query-guard: destructive: DELETE without WHERE.
-               Run this command anyway?
-  > 1. Cancel
-    2. Run it
-```
 
 ## Why
 
