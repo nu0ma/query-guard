@@ -1,0 +1,5 @@
+# Written by Claude Code for the running build when the mod loads; never commit.
+plugins/*/.claude-plugin/types/
+
+node_modules/
+.DS_Store

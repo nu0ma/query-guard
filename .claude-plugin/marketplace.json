@@ -1,0 +1,14 @@
+{
+  "name": "nu0ma",
+  "owner": { "name": "nu0ma" },
+  "metadata": { "description": "nu0ma's Claude Code plugins and mods" },
+  "plugins": [
+    {
+      "name": "query-guard",
+      "source": "./plugins/query-guard",
+      "description": "Asks before Claude runs destructive or slow-looking SQL through a DB CLI: DELETE, UPDATE without WHERE, DROP, TRUNCATE, full scans and cartesian joins.",
+      "homepage": "https://github.com/nu0ma/query-guard",
+      "repository": "https://github.com/nu0ma/query-guard"
+    }
+  ]
+}
