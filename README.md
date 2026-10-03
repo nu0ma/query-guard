@@ -42,17 +42,17 @@ Allow rules such as `Bash(psql:*)` make database work smooth, and they also wave
 
 ## What it catches
 
-query-guard looks only at Bash commands that call one of these CLIs:
+query-guard looks only at Bash commands that call one of these CLIs, directly, through a pipe or heredoc, or inside a wrapper such as `docker exec`, `ssh` or `bash -c`:
 
-`psql` · `mysql` · `mariadb` · `sqlite3` · `duckdb` · `bq` · `spanner-cli` · `spanner-readonly-cli` · `clickhouse-client` · `gcloud spanner databases execute-sql`
+`psql` · `pgcli` · `mysql` · `mariadb` · `mycli` · `sqlite3` · `litecli` · `duckdb` · `bq` · `spanner-cli` · `spanner-readonly-cli` · `clickhouse-client` · `clickhouse client` · `cockroach` · `usql` · `sqlcmd` · `snowsql` · `trino` · `gcloud spanner databases execute-sql`
 
 ### Destructive
 
 | Rule | Example |
 | --- | --- |
-| `DELETE` (flagged louder without `WHERE`) | `DELETE FROM users` |
-| `UPDATE` without `WHERE` | `UPDATE orders SET status = 'x'` |
-| `DROP TABLE / DATABASE / SCHEMA / INDEX / VIEW / COLUMN` | `DROP TABLE events` |
+| `DELETE` (flagged louder without `WHERE`; `FROM` optional, as in Spanner and BigQuery) | `DELETE FROM users` |
+| `UPDATE` without `WHERE`, multi-table forms included | `UPDATE orders SET status = 'x'` |
+| `DROP` of any object | `DROP TABLE events` |
 | `ALTER TABLE ... DROP` | `ALTER TABLE t DROP c` |
 | `TRUNCATE` | `TRUNCATE events` |
 
@@ -68,10 +68,18 @@ query-guard looks only at Bash commands that call one of these CLIs:
 
 Several hits are joined into one reason, for example `query-guard: destructive: DELETE without WHERE / possibly slow: LIKE with leading wildcard`.
 
+### Fail-safe by design
+
+When query-guard and the database could read a statement differently, it errs toward asking:
+
+- **Risky keywords are searched in the raw SQL**, comments and string literals included. MySQL runs `/*! ... */` comments, and dialects disagree on where a string ends, so `WHERE note = 'DROP TABLE x'` asks too.
+- **A `WHERE` or `LIMIT` counts only when it is the statement's own.** One inside a comment (`--`, `#`, `/* */`), a string (`'...'`, `"..."`, `` `...` ``, `$$...$$`) or a subquery is ignored, so `UPDATE t SET a = 1 --WHERE id = 1` asks.
+
 ### What it leaves alone
 
 - Commands that call no DB CLI: `echo "DELETE FROM users"` passes untouched.
-- Keywords inside SQL comments (`-- DELETE ...`, `/* ... */`) and string literals (`WHERE note = 'DROP TABLE x'`).
+- A DB CLI that is only text: named in a heredoc body (a release note, a file being written) or in an `echo`, `printf`, `grep` or `rg` command.
+- `ON DELETE CASCADE`, `ON UPDATE`, `FOR UPDATE` and `ON DUPLICATE KEY UPDATE`, which do not change rows by themselves.
 
 ## How it works
 
@@ -82,7 +90,7 @@ Several hits are joined into one reason, for example `query-guard: destructive: 
 flowchart LR
   B[Bash tool call] --> C{calls a DB CLI?}
   C -- no --> V[engine verdict as is]
-  C -- yes --> P[strip comments, mask literals, split statements]
+  C -- yes --> P[split statements, check keywords raw, WHERE/LIMIT masked]
   P --> R{any rule hits?}
   R -- no --> V
   R -- yes --> A[toast + ask the user]
@@ -104,7 +112,8 @@ Detection is static and regex-based. It never connects to a database, and the pl
 - Function hooks are early access, and their API may change between Claude Code releases.
 - SQL read from a file (`psql -f file.sql`, `mysql < file.sql`) is not inspected; only the command text is.
 - "Possibly slow" is a guess: query-guard does not know how big a table is, so `SELECT * FROM small_lookup` asks too.
-- Regex matching can miss or over-report, for example a `WHERE` that only appears inside a subquery.
+- SQL sent from a program (a Python or Node script, an ORM, a migration tool) is not inspected; only DB CLIs are.
+- Detection is regex-based. It leans toward over-reporting, so a keyword in a comment or a string, or an escaped quote inside a shell-quoted query, can ask when nothing is wrong.
 - In default mode without an allow rule for the command, approving `Run it` is followed by the usual permission prompt, so you answer twice.
 - In a headless `-p` run every risky command is denied, since nobody can answer.
 
