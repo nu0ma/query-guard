@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
+import { CANCEL, RUN } from '../hooks/register.ts'
 import { analyze } from '../hooks/sql-rules.ts'
 
 const labels = (command: string) => analyze(command).map(f => f.label)
@@ -29,35 +30,50 @@ describe('analyze', () => {
   }
 })
 
-describe('tool.check', () => {
-  test('asks and toasts on risky SQL even when the engine allows it', async ($, on) => {
+describe('tool.call', () => {
+  const RISKY = 'psql -c "DELETE FROM users"'
+  const REASON = 'query-guard: destructive: DELETE without WHERE'
+
+  const cases = [
+    { name: 'runs risky SQL once the user approves', command: RISKY, answer: RUN, wantAsked: 1, wantRan: true },
+    { name: 'denies risky SQL when the user cancels', command: RISKY, answer: CANCEL, wantAsked: 1, wantRan: false },
+    { name: 'denies risky SQL when the user types something else', command: RISKY, answer: 'maybe', wantAsked: 1, wantRan: false },
+    { name: 'denies risky SQL when the dialog is dismissed', command: RISKY, answer: undefined, wantAsked: 1, wantRan: false },
+    { name: 'runs safe SQL without asking', command: 'psql -c "SELECT id FROM t WHERE id = 1 LIMIT 1"', answer: RUN, wantAsked: 0, wantRan: true },
+  ]
+  for (const c of cases) {
+    test(c.name, async ($, on) => {
+      const asked: string[] = []
+      const ran: string[] = []
+      on('tool.call', { tool: 'AskUserQuestion' }, (_$, e) => {
+        const question = e.questions[0]?.question ?? ''
+        asked.push(question)
+        if (c.answer === undefined) return { deny: 'dismissed' }
+        return { result: { questions: e.questions, answers: { [question]: c.answer } } }
+      })
+      on('tool.call', { tool: 'Bash' }, (_$, e) => {
+        ran.push(e.command)
+        return { result: { stdout: '', stderr: '', interrupted: false } }
+      })
+
+      const got = await $.tool.call({ tool: 'Bash', command: c.command })
+
+      expect(asked.length).toBe(c.wantAsked)
+      expect(ran.length > 0).toBe(c.wantRan)
+      if (!c.wantRan) expect(got).toEqual({ deny: `${REASON}. The user did not approve running it.` })
+    })
+  }
+
+  test('toasts the reason before asking', async ($, on) => {
     const toasts: string[] = []
-    on('tool.check', { tool: 'Bash' }, () => ({ decision: 'allow' }))
     on('ui.toast', (_$, e, next) => {
       toasts.push(e.text)
       return next(e)
     })
+    on('tool.call', { tool: 'AskUserQuestion' }, () => ({ deny: 'dismissed' }))
 
-    const got = await $.tool.check({ tool: 'Bash', input: { command: 'psql -c "DELETE FROM users"' } })
+    await $.tool.call({ tool: 'Bash', command: RISKY })
 
-    expect(got.decision).toBe('ask')
-    expect(got.reason).toBe('query-guard: destructive: DELETE without WHERE')
-    expect(toasts).toEqual(['query-guard: destructive: DELETE without WHERE'])
-  })
-
-  test('keeps the engine verdict for safe SQL', async ($, on) => {
-    on('tool.check', { tool: 'Bash' }, () => ({ decision: 'allow' }))
-
-    const got = await $.tool.check({ tool: 'Bash', input: { command: 'psql -c "SELECT id FROM t WHERE id = 1 LIMIT 1"' } })
-
-    expect(got.decision).toBe('allow')
-  })
-
-  test('keeps a deny from beneath', async ($, on) => {
-    on('tool.check', { tool: 'Bash' }, () => ({ decision: 'deny', reason: 'blocked' }))
-
-    const got = await $.tool.check({ tool: 'Bash', input: { command: 'psql -c "DROP TABLE t"' } })
-
-    expect(got).toEqual({ decision: 'deny', reason: 'blocked' })
+    expect(toasts).toEqual([REASON])
   })
 })

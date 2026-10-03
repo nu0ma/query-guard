@@ -2,7 +2,7 @@
 
 # query-guard
 
-A guard rail for SQL in Claude Code. Before Claude runs a destructive or slow-looking query through a DB CLI, you get a toast and a confirmation dialog.
+A guard rail for SQL in Claude Code. Before Claude runs a destructive or slow-looking query through a DB CLI, you get a toast and a question only you can answer, in every permission mode.
 
 ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757)
 ![Claude Code 2.1.280+](https://img.shields.io/badge/Claude%20Code-2.1.280%2B-555)
@@ -15,16 +15,15 @@ A guard rail for SQL in Claude Code. Before Claude runs a destructive or slow-lo
 ```text
 Claude wants to run:  psql -c "DELETE FROM users"
 
-  query-guard: destructive: DELETE without WHERE        <- toast + dialog reason
-
-  Do you want to proceed?
-  > 1. Yes
-    2. No
+  [query-guard] query-guard: destructive: DELETE without WHERE.
+               Run this command anyway?
+  > 1. Cancel
+    2. Run it
 ```
 
 ## Why
 
-Allow rules such as `Bash(psql:*)` make database work smooth, and they also wave through `DELETE FROM users` or a `SELECT *` over a billion-row table. query-guard reads the SQL in the command and puts every risky call back in front of you, even when an allow rule would have let it run.
+Allow rules such as `Bash(psql:*)` make database work smooth, and they also wave through `DELETE FROM users` or a `SELECT *` over a billion-row table. Auto mode goes further and lets a classifier approve calls for you. query-guard reads the SQL in the command and puts every risky call back in front of you, whatever the allow rules or the permission mode would have decided.
 
 ## Quick start
 
@@ -80,7 +79,6 @@ Several hits are joined into one reason, for example `query-guard: destructive: 
 
 - Commands that call no DB CLI: `echo "DELETE FROM users"` passes untouched.
 - Keywords inside SQL comments (`-- DELETE ...`, `/* ... */`) and string literals (`WHERE note = 'DROP TABLE x'`).
-- Calls the engine already denies: a `deny` stays a `deny`.
 
 ## How it works
 
@@ -94,10 +92,12 @@ flowchart LR
   C -- yes --> P[strip comments, mask literals, split statements]
   P --> R{any rule hits?}
   R -- no --> V
-  R -- yes --> A[toast + decision: ask]
+  R -- yes --> A[toast + ask the user]
+  A -- Run it --> E[engine: permission check, then the tool]
+  A -- anything else --> D[deny]
 ```
 
-query-guard is a single `tool.check` hook on `Bash`. It lets the engine decide first (settings rules, permission mode, PreToolUse hooks), keeps a `deny` as it is, and otherwise turns the decision into `ask` with the hits as the reason, which the permission dialog shows.
+query-guard is a single `tool.call` hook on `Bash`. For a risky command it asks you through Claude Code's own question dialog (`$.ui.ask`) before the permission check runs, so no permission mode, allow rule or auto-mode classifier can answer for you. Only `Run it` lets the call go on to the normal permission flow; `Cancel`, any other answer, a dismissed dialog, or a headless `-p` run with nobody to ask denies it. `Cancel` is listed first so a dialog that resolves on its own lands on it.
 
 Detection is static and regex-based. It never connects to a database, and the plugin has no dependencies: no `package.json`, nothing to install.
 
@@ -112,7 +112,8 @@ Detection is static and regex-based. It never connects to a database, and the pl
 - SQL read from a file (`psql -f file.sql`, `mysql < file.sql`) is not inspected; only the command text is.
 - "Possibly slow" is a guess: query-guard does not know how big a table is, so `SELECT * FROM small_lookup` asks too.
 - Regex matching can miss or over-report, for example a `WHERE` that only appears inside a subquery.
-- `ask` goes to the current permission mode's decider, so in `bypassPermissions` or auto mode the dialog may not appear. The toast still does.
+- In default mode without an allow rule for the command, approving `Run it` is followed by the usual permission prompt, so you answer twice.
+- In a headless `-p` run every risky command is denied, since nobody can answer.
 
 </details>
 

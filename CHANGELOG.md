@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0
+
+- Changed the confirmation from a `tool.check` `ask` to a question asked through `$.ui.ask` in a `tool.call` hook, so it appears in every permission mode, auto mode and `bypassPermissions` included; only `Run it` runs the command, and a dismissed dialog or a headless run denies it
+
 ## 0.1.0
 
 - Added a `tool.check` hook that inspects SQL passed to DB CLIs (`psql`, `mysql`, `mariadb`, `sqlite3`, `duckdb`, `bq`, `spanner-cli`, `spanner-readonly-cli`, `clickhouse-client`, `gcloud spanner databases execute-sql`) and turns the permission decision into `ask` with a toast when it looks risky

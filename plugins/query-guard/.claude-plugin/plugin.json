@@ -1,6 +1,6 @@
 {
   "name": "query-guard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Asks before Claude runs destructive or slow-looking SQL through a DB CLI: DELETE, UPDATE without WHERE, DROP, TRUNCATE, full scans and cartesian joins.",
   "author": {
     "name": "nu0ma"
