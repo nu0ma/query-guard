@@ -1,0 +1,5 @@
+{
+  "name": "query-guard",
+  "version": "0.1.0",
+  "description": "Detects destructive or slow-looking SQL passed to DB CLIs and asks for confirmation with a toast before it runs"
+}
