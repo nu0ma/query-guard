@@ -56,6 +56,15 @@ describe('analyze', () => {
     { name: 'heredoc operator right after the CLI', command: "psql<<'EOF'\nTRUNCATE t;\nEOF", want: ['TRUNCATE'] },
     { name: 'WHERE in a later shell argument', command: `psql -c "UPDATE t SET a = 1" -v x="WHERE"`, want: ['UPDATE without WHERE'] },
     { name: 'WHERE in a later --command', command: `psql --command="UPDATE t SET a = 1" --command="SELECT 1 WHERE true"`, want: ['UPDATE without WHERE'] },
+    { name: 'WHERE from a parameter expansion', command: `psql -c "UPDATE t SET a = 1 \${UNSET+WHERE}"`, want: ['UPDATE without WHERE'] },
+    { name: 'WHERE from a variable', command: `psql -c "UPDATE t SET a = 1 $FILTER"`, want: ['UPDATE without WHERE'] },
+    { name: 'WHERE inside a command substitution', command: `psql -c "UPDATE t SET a = 1 $(true WHERE)"`, want: ['UPDATE without WHERE'] },
+    { name: 'keyword glued by a parameter expansion', command: `psql -c "\${X:-DROP} TABLE t"`, want: ['DROP TABLE'] },
+    { name: 'heredoc script run by a shell later', command: "cat > s.sh <<'EOF'\npsql -c \"DROP TABLE t\"\nEOF\nbash s.sh", want: ['DROP TABLE'] },
+    { name: 'heredoc script made executable and run', command: "cat > s.sh <<'EOF'\npsql -c \"DROP TABLE t\"\nEOF\nchmod +x s.sh && ./s.sh", want: ['DROP TABLE'] },
+    { name: 'heredoc script run by its path', command: "tee /tmp/s.sh <<'EOF'\nmysql -e 'TRUNCATE t'\nEOF\n/tmp/s.sh", want: ['TRUNCATE'] },
+    { name: 'heredoc script sourced', command: "cat > s.sh <<'EOF'\npsql -c \"DROP TABLE t\"\nEOF\n. s.sh", want: ['DROP TABLE'] },
+    { name: 'heredoc note then a release', command: "cat > $S/notes.md <<'EOF'\nUse `psql -f file.sql`; DROP TABLE is caught\nEOF\ngh release create v1 --notes-file $S/notes.md", want: [] },
   ]
   for (const c of cases) {
     test(c.name, async () => {

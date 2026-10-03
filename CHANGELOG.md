@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.3
+
+- Fixed a shell expansion fooling the guard: a `WHERE` that may expand to nothing (`${UNSET+WHERE}`, `$VAR`) no longer counts as the statement's own, and a keyword glued to shell syntax (`${X:-DROP} TABLE t`) is caught by a reading with shell punctuation blanked
+- Fixed a script written by a quoted heredoc and run later in the same command (`bash s.sh`, `chmod +x s.sh && ./s.sh`, `/tmp/s.sh`, `. s.sh`) going unchecked: a heredoc body now counts as text only when nothing in the command could run the file it writes
+
 ## 0.2.2
 
 - Fixed DB CLIs slipping past the guard inside `echo`, `printf` or `grep` through a command or process substitution (`$(...)`, backticks, `<(...)`), and in a heredoc body run by a shell, `ssh` or a pipe, or expanded because its delimiter is unquoted; a heredoc body now counts as text only when its delimiter is quoted and `cat` or `tee` alone reads it

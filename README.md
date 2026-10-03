@@ -76,14 +76,14 @@ Several hits are joined into one reason, for example `query-guard: destructive: 
 When query-guard and the database could read a statement differently, it errs toward asking:
 
 - **Risky keywords are searched in the raw SQL**, comments and string literals included. MySQL runs `/*! ... */` comments, and dialects disagree on where a string ends, so `WHERE note = 'DROP TABLE x'` asks too.
-- **A `WHERE` or `LIMIT` counts only when it is the statement's own.** One inside a comment (`--`, `#`, `/* */`), a string (`'...'`, `"..."`, `` `...` ``, `$$...$$`) or a subquery is ignored, so `UPDATE t SET a = 1 --WHERE id = 1` asks.
-- **Every reading of the command is checked, and the strictest wins.** The rules run on the raw command, on each shell word with its quotes removed (so `psql -c "UPDATE t SET a = 1" -v x="WHERE"` asks), and on each heredoc body.
+- **A `WHERE` or `LIMIT` counts only when it is the statement's own.** One inside a comment (`--`, `#`, `/* */`), a string (`'...'`, `"..."`, `` `...` ``, `$$...$$`), a subquery or a shell expansion that may come out empty (`$VAR`, `${...}`, `$(...)`) is ignored, so `UPDATE t SET a = 1 --WHERE id = 1` asks.
+- **Every reading of the command is checked, and the strictest wins.** The rules run on the raw command, on the command with shell punctuation blanked (so `${X:-DROP} TABLE t` asks), on each shell word with its quotes removed (so `psql -c "UPDATE t SET a = 1" -v x="WHERE"` asks), and on each heredoc body.
 - **A CLI name is found the way the shell would run it**, quotes and backslashes removed: `\psql`, `ps''ql`, `X=psql; $X` and `psql<<EOF` all count.
 
 ### What it leaves alone
 
 - Commands that call no DB CLI: `echo "DELETE FROM users"` passes untouched.
-- A DB CLI that is only text: named in an `echo`, `printf` or `grep` command that runs no substitution (`$(...)`, backticks, `<(...)`), or in the body of a heredoc whose delimiter is quoted (`<<'EOF'`) and that only `cat` or `tee` reads, as when writing a release note.
+- A DB CLI that is only text: named in an `echo`, `printf` or `grep` command that runs no substitution (`$(...)`, backticks, `<(...)`), or in the body of a heredoc whose delimiter is quoted (`<<'EOF'`), that only `cat` or `tee` reads, and whose command runs nothing that could execute the written file (a shell, `source`, `.`, `chmod`, an interpreter, or a path such as `./s.sh`), as when writing a release note.
 - `ON DELETE CASCADE`, `ON UPDATE`, `FOR UPDATE` and `ON DUPLICATE KEY UPDATE`, which do not change rows by themselves.
 
 ## How it works

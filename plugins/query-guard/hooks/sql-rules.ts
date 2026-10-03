@@ -38,9 +38,15 @@ const SHELL_QUOTING = /['"\\]/g
 // Groups: the line holding the operator, the delimiter's quote, the delimiter, the body
 const HEREDOC = /^([^\n]*?<<-?[ \t]*(['"]?)([A-Za-z_]\w*)\2[^\n]*)\n([\s\S]*?)\n[ \t]*\3[ \t]*(?=\n|$)/gm
 
-// A heredoc body is only data when its delimiter is quoted (no expansion) and nothing but
-// cat or tee reads it: a shell, ssh or a pipe would run it
+// A heredoc body is only data when its delimiter is quoted (no expansion), nothing but
+// cat or tee reads it (a shell, ssh or a pipe would run it), and nothing else in the
+// command could run the file it writes
 const DATA_SINK_LINE = /^\s*(?:cat|tee)\b[^|;&`()]*$/
+
+const CODE_RUNNER =
+  /(?:^|[^\w.-])(?:bash|sh|zsh|dash|ksh|fish|source|eval|exec|chmod|xargs|python3?|node|deno|bun|ruby|perl|php|make|just)(?![\w-])/
+
+const COMMAND_PREFIX = /^(?:\w+=\S*|sudo|env|exec|nohup|time|nice|command)$/
 
 // Segments that start with these only print or search text, unless they run a substitution
 const INERT_SEGMENT = /^\s*(?:echo|printf|grep)\b/
@@ -53,8 +59,13 @@ const STATEMENT_SEPARATOR = /;|&&|\|\||\||\s-[ce]\s/
 // Everything that can hide a WHERE or a LIMIT from the database: comments in any dialect
 // (`--`, `#`, `/* */`), strings ('...', "...", `...`, $tag$...$tag$) with backslash
 // escapes, and unterminated ones to the end. Masking too much only asks more often.
+// Shell expansions (${...}, $VAR) count as opaque too: they can expand to nothing.
+// $(...) goes with the parenthesized groups below.
 const OPAQUE =
-  /\/\*[\s\S]*?(?:\*\/|$)|--[^\n]*|#[^\n]*|\$(\w*)\$[\s\S]*?(?:\$\1\$|$)|'(?:[^'\\]|\\[\s\S])*(?:'|$)|"(?:[^"\\]|\\[\s\S])*(?:"|$)|`[^`]*(?:`|$)/g
+  /\/\*[\s\S]*?(?:\*\/|$)|--[^\n]*|#[^\n]*|\$(\w*)\$[\s\S]*?(?:\$\1\$|$)|\$\{[^}]*(?:\}|$)|\$[A-Za-z_]\w*|\$\d|'(?:[^'\\]|\\[\s\S])*(?:'|$)|"(?:[^"\\]|\\[\s\S])*(?:"|$)|`[^`]*(?:`|$)/g
+
+// Shell syntax that can glue a keyword to its neighbours (${X:-DROP} TABLE)
+const SHELL_PUNCTUATION = /[${}()`'"\\]/g
 
 const PARENTHESIZED = /\([^()]*\)/g
 
@@ -159,13 +170,30 @@ const RULES: readonly Rule[] = [
 
 const isInert = (segment: string): boolean => INERT_SEGMENT.test(segment) && !SUBSTITUTION.test(segment)
 
-export const isDbCommand = (command: string): boolean =>
-  command
+// The command a segment runs, past assignments and wrappers like sudo or env
+const commandWord = (segment: string): string =>
+  segment
+    .replace(SHELL_QUOTING, '')
+    .trim()
+    .split(/\s+/)
+    .find(word => !COMMAND_PREFIX.test(word)) ?? ''
+
+// Whether the command could run a file it wrote: an interpreter, chmod, or a path run as a command
+const runsCode = (command: string): boolean =>
+  command.split(SHELL_SEGMENT).some(segment => {
+    const word = commandWord(segment)
+    return CODE_RUNNER.test(segment.replace(SHELL_QUOTING, '')) || word === '.' || word.includes('/')
+  })
+
+export const isDbCommand = (command: string): boolean => {
+  const mayRunWrittenFile = runsCode(command.replace(HEREDOC, (_block: string, line: string) => line))
+  return command
     .replace(HEREDOC, (block: string, line: string, quote: string) =>
-      quote !== '' && DATA_SINK_LINE.test(line) ? line : block,
+      quote !== '' && !mayRunWrittenFile && DATA_SINK_LINE.test(line) ? line : block,
     )
     .split(SHELL_SEGMENT)
     .some(segment => !isInert(segment) && DB_CLI.test(segment.replace(SHELL_QUOTING, '')))
+}
 
 // Splits a command into words the way a POSIX shell does, quotes removed, so SQL passed
 // as one argument is read without the shell quotes around it and its neighbours
@@ -216,15 +244,16 @@ const shellWords = (text: string): string[] => {
   return words
 }
 
-// Every reading of the command a rule runs on: the raw text, each shell word, and each
-// heredoc body. Findings are unioned, so no single reading can hide a statement.
+// Every reading of the command a rule runs on: the raw text, the text with shell
+// punctuation blanked, each shell word, and each heredoc body. Findings are unioned, so
+// no single reading can hide a statement.
 const readings = (command: string): string[] => {
   const bodies: string[] = []
   const withoutBodies = command.replace(HEREDOC, (_block: string, line: string, _q: string, _d: string, body: string) => {
     bodies.push(body)
     return line
   })
-  return [command, ...shellWords(withoutBodies), ...bodies]
+  return [command, command.replace(SHELL_PUNCTUATION, ' '), ...shellWords(withoutBodies), ...bodies]
 }
 
 export const analyze = (command: string): Finding[] => {
