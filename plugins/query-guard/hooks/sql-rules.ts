@@ -25,17 +25,26 @@ const DB_CLIS = [
   'trino',
 ]
 
+// Matched against a segment with its quotes and backslashes removed, so `\psql`, `ps''ql`,
+// `X=psql` and `psql<<EOF` all name the CLI the shell runs
 const DB_CLI = new RegExp(
-  `(?:^|[\\s;&|(\`/"'])(?:${DB_CLIS.join('|')})(?=[\\s;&|)"'\`]|$)` +
+  `(?:^|[^\\w.-])(?:${DB_CLIS.join('|')})(?![\\w-])` +
     '|\\bgcloud\\b[\\s\\S]*?\\bspanner\\s+databases\\s+execute-sql\\b' +
     '|\\bclickhouse\\s+client\\b',
 )
 
-// A heredoc body is data unless a DB CLI reads it, so it never makes a command a DB command
-const HEREDOC = /(<<-?[ \t]*(['"]?)([A-Za-z_]\w*)\2[^\n]*)\n[\s\S]*?\n[ \t]*\3[ \t]*(?=\n|$)/g
+const SHELL_QUOTING = /['"\\]/g
 
-// Segments that start with these only print or search text
-const INERT_SEGMENT = /^\s*(?:echo|printf|grep|rg)\b/
+// Groups: the line holding the operator, the delimiter's quote, the delimiter, the body
+const HEREDOC = /^([^\n]*?<<-?[ \t]*(['"]?)([A-Za-z_]\w*)\2[^\n]*)\n([\s\S]*?)\n[ \t]*\3[ \t]*(?=\n|$)/gm
+
+// A heredoc body is only data when its delimiter is quoted (no expansion) and nothing but
+// cat or tee reads it: a shell, ssh or a pipe would run it
+const DATA_SINK_LINE = /^\s*(?:cat|tee)\b[^|;&`()]*$/
+
+// Segments that start with these only print or search text, unless they run a substitution
+const INERT_SEGMENT = /^\s*(?:echo|printf|grep)\b/
+const SUBSTITUTION = /\$\(|`|<\(|>\(/
 
 const SHELL_SEGMENT = /;|&&|\|\||\||\n/
 
@@ -148,28 +157,95 @@ const RULES: readonly Rule[] = [
   },
 ]
 
+const isInert = (segment: string): boolean => INERT_SEGMENT.test(segment) && !SUBSTITUTION.test(segment)
+
 export const isDbCommand = (command: string): boolean =>
   command
-    .replace(HEREDOC, '$1')
+    .replace(HEREDOC, (block: string, line: string, quote: string) =>
+      quote !== '' && DATA_SINK_LINE.test(line) ? line : block,
+    )
     .split(SHELL_SEGMENT)
-    .some(segment => !INERT_SEGMENT.test(segment) && DB_CLI.test(segment))
+    .some(segment => !isInert(segment) && DB_CLI.test(segment.replace(SHELL_QUOTING, '')))
+
+// Splits a command into words the way a POSIX shell does, quotes removed, so SQL passed
+// as one argument is read without the shell quotes around it and its neighbours
+const shellWords = (text: string): string[] => {
+  const words: string[] = []
+  let word = ''
+  let inWord = false
+  const flush = () => {
+    if (inWord) words.push(word)
+    word = ''
+    inWord = false
+  }
+
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i] ?? ''
+    if (c === "'" || (c === '$' && text[i + 1] === "'")) {
+      // '...' is literal; $'...' takes backslash escapes
+      const ansi = c === '$'
+      let j = i + (ansi ? 2 : 1)
+      while (j < text.length && text[j] !== "'") {
+        if (ansi && text[j] === '\\') j++
+        word += text[j] ?? ''
+        j++
+      }
+      i = j
+      inWord = true
+    } else if (c === '"') {
+      let j = i + 1
+      while (j < text.length && text[j] !== '"') {
+        if (text[j] === '\\' && '$`"\\\n'.includes(text[j + 1] ?? 'x')) j++
+        word += text[j] ?? ''
+        j++
+      }
+      i = j
+      inWord = true
+    } else if (c === '\\') {
+      word += text[i + 1] ?? ''
+      i++
+      inWord = true
+    } else if (/\s/.test(c) || ';&|<>()'.includes(c)) {
+      flush()
+    } else {
+      word += c
+      inWord = true
+    }
+  }
+  flush()
+  return words
+}
+
+// Every reading of the command a rule runs on: the raw text, each shell word, and each
+// heredoc body. Findings are unioned, so no single reading can hide a statement.
+const readings = (command: string): string[] => {
+  const bodies: string[] = []
+  const withoutBodies = command.replace(HEREDOC, (_block: string, line: string, _q: string, _d: string, body: string) => {
+    bodies.push(body)
+    return line
+  })
+  return [command, ...shellWords(withoutBodies), ...bodies]
+}
 
 export const analyze = (command: string): Finding[] => {
   if (!isDbCommand(command)) return []
 
-  const findings: Finding[] = []
-  const seen = new Set<string>()
-
-  for (const statement of command.split(STATEMENT_SEPARATOR)) {
-    for (const rule of RULES) {
-      const label = rule.match(statement)
-      if (label === undefined || seen.has(label)) continue
-      seen.add(label)
-      findings.push({ severity: rule.severity, label })
+  const labels = RULES.map(() => new Set<string>())
+  for (const reading of readings(command)) {
+    for (const statement of reading.split(STATEMENT_SEPARATOR)) {
+      RULES.forEach((rule, i) => {
+        const label = rule.match(statement)
+        if (label !== undefined) labels[i]?.add(label)
+      })
     }
   }
 
-  return findings
+  return RULES.flatMap((rule, i) => {
+    const found = labels[i] ?? new Set<string>()
+    // A reading without the WHERE outranks one that saw it
+    if (found.has('DELETE without WHERE')) found.delete('DELETE')
+    return [...found].map(label => ({ severity: rule.severity, label }))
+  })
 }
 
 export const describe = (findings: readonly Finding[]): string => {

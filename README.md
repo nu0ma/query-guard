@@ -42,7 +42,10 @@ Allow rules such as `Bash(psql:*)` make database work smooth, and they also wave
 
 ## What it catches
 
-query-guard looks only at Bash commands that call one of these CLIs, directly, through a pipe or heredoc, or inside a wrapper such as `docker exec`, `ssh` or `bash -c`:
+> [!IMPORTANT]
+> query-guard is a safety net against mistakes, not a security boundary. A command built to hide its SQL (a CLI name assembled at run time, an encoded query, a script that talks to the database) can get past any text check. To make writes impossible, connect with a read-only database user.
+
+query-guard looks only at Bash commands that call one of these CLIs, directly, through a pipe or heredoc, from a variable or a command substitution, or inside a wrapper such as `docker exec`, `ssh` or `bash -c`:
 
 `psql` · `pgcli` · `mysql` · `mariadb` · `mycli` · `sqlite3` · `litecli` · `duckdb` · `bq` · `spanner-cli` · `spanner-readonly-cli` · `clickhouse-client` · `clickhouse client` · `cockroach` · `usql` · `sqlcmd` · `snowsql` · `trino` · `gcloud spanner databases execute-sql`
 
@@ -74,11 +77,13 @@ When query-guard and the database could read a statement differently, it errs to
 
 - **Risky keywords are searched in the raw SQL**, comments and string literals included. MySQL runs `/*! ... */` comments, and dialects disagree on where a string ends, so `WHERE note = 'DROP TABLE x'` asks too.
 - **A `WHERE` or `LIMIT` counts only when it is the statement's own.** One inside a comment (`--`, `#`, `/* */`), a string (`'...'`, `"..."`, `` `...` ``, `$$...$$`) or a subquery is ignored, so `UPDATE t SET a = 1 --WHERE id = 1` asks.
+- **Every reading of the command is checked, and the strictest wins.** The rules run on the raw command, on each shell word with its quotes removed (so `psql -c "UPDATE t SET a = 1" -v x="WHERE"` asks), and on each heredoc body.
+- **A CLI name is found the way the shell would run it**, quotes and backslashes removed: `\psql`, `ps''ql`, `X=psql; $X` and `psql<<EOF` all count.
 
 ### What it leaves alone
 
 - Commands that call no DB CLI: `echo "DELETE FROM users"` passes untouched.
-- A DB CLI that is only text: named in a heredoc body (a release note, a file being written) or in an `echo`, `printf`, `grep` or `rg` command.
+- A DB CLI that is only text: named in an `echo`, `printf` or `grep` command that runs no substitution (`$(...)`, backticks, `<(...)`), or in the body of a heredoc whose delimiter is quoted (`<<'EOF'`) and that only `cat` or `tee` reads, as when writing a release note.
 - `ON DELETE CASCADE`, `ON UPDATE`, `FOR UPDATE` and `ON DUPLICATE KEY UPDATE`, which do not change rows by themselves.
 
 ## How it works
@@ -90,7 +95,7 @@ When query-guard and the database could read a statement differently, it errs to
 flowchart LR
   B[Bash tool call] --> C{calls a DB CLI?}
   C -- no --> V[engine verdict as is]
-  C -- yes --> P[split statements, check keywords raw, WHERE/LIMIT masked]
+  C -- yes --> P[raw text, shell words, heredoc bodies: strictest reading wins]
   P --> R{any rule hits?}
   R -- no --> V
   R -- yes --> A[toast + ask the user]
@@ -100,7 +105,7 @@ flowchart LR
 
 query-guard is a single `tool.call` hook on `Bash`. For a risky command it asks you through Claude Code's own question dialog (`$.ui.ask`) before the permission check runs, so no permission mode, allow rule or auto-mode classifier can answer for you. Only `Run it` lets the call go on to the normal permission flow; `Cancel`, any other answer, a dismissed dialog, or a headless `-p` run with nobody to ask denies it. `Cancel` is listed first so a dialog that resolves on its own lands on it.
 
-Detection is static and regex-based. It never connects to a database, and the plugin has no dependencies: no `package.json`, nothing to install.
+Detection is static: regular expressions plus a small POSIX shell word splitter. It never connects to a database, and the plugin has no dependencies: no `package.json`, nothing to install.
 
 </details>
 
@@ -113,7 +118,8 @@ Detection is static and regex-based. It never connects to a database, and the pl
 - SQL read from a file (`psql -f file.sql`, `mysql < file.sql`) is not inspected; only the command text is.
 - "Possibly slow" is a guess: query-guard does not know how big a table is, so `SELECT * FROM small_lookup` asks too.
 - SQL sent from a program (a Python or Node script, an ORM, a migration tool) is not inspected; only DB CLIs are.
-- Detection is regex-based. It leans toward over-reporting, so a keyword in a comment or a string, or an escaped quote inside a shell-quoted query, can ask when nothing is wrong.
+- A command can hide its SQL from any text check: a CLI name or query assembled at run time (`$(printf ps)ql`, base64), `eval`, aliases and shell functions defined elsewhere. See the note at the top of [What it catches](#what-it-catches).
+- Detection leans toward over-reporting, so a keyword in a comment or a string, a CLI name in a commit message, or an escaped quote inside a shell-quoted query can ask when nothing is wrong.
 - In default mode without an allow rule for the command, approving `Run it` is followed by the usual permission prompt, so you answer twice.
 - In a headless `-p` run every risky command is denied, since nobody can answer.
 

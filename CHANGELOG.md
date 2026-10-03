@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.2
+
+- Fixed DB CLIs slipping past the guard inside `echo`, `printf` or `grep` through a command or process substitution (`$(...)`, backticks, `<(...)`), and in a heredoc body run by a shell, `ssh` or a pipe, or expanded because its delimiter is unquoted; a heredoc body now counts as text only when its delimiter is quoted and `cat` or `tee` alone reads it
+- Fixed a CLI name written so the shell still runs it going unnoticed: `\psql`, `ps''ql`, `X=psql; $X`, `psql<<EOF`
+- Fixed a `WHERE` in a later shell argument (`-v x="WHERE"`, a second `--command`) counting as the statement's own: each shell word, quotes removed, is now checked too, and the strictest reading wins
+- Removed `rg` from the commands that only search text, since `rg --pre` runs a program
+- Added a note to the README that query-guard is a safety net, not a security boundary, and that a read-only database user is what makes writes impossible
+
 ## 0.2.1
 
 - Fixed risky SQL slipping past the guard: a `WHERE` hidden in a comment (`--WHERE`, `# WHERE`), a dollar-quoted or backslash-escaped string, a quoted identifier or a subquery no longer counts as the statement's own; keywords in comments and strings, MySQL's executable `/*! ... */` comments included, now ask instead of being ignored; `DELETE` without `FROM` (Spanner, BigQuery) and multi-table `UPDATE ... JOIN ... SET` are caught; `DROP` of any object asks

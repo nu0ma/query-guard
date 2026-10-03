@@ -26,6 +26,7 @@ describe('analyze', () => {
     { name: 'DB CLI named by echo', command: `echo "run psql -c 'DELETE FROM users'"`, want: [] },
     { name: 'DB CLI named by grep', command: `grep -rn "psql -c 'DELETE FROM users'" docs`, want: [] },
     { name: 'DB CLI named in a heredoc body', command: "cat > notes.md <<'EOF'\n- `psql -c 'DELETE FROM users'` is risky\nEOF", want: [] },
+    { name: 'quoted heredoc written to a variable path', command: "cat > $S/notes.md <<'EOF'\nUse `psql -f file.sql`; DROP TABLE is caught\nEOF", want: [] },
     { name: 'heredoc read by a DB CLI', command: "psql <<'EOF'\nDELETE FROM users;\nEOF", want: ['DELETE without WHERE'] },
     { name: 'SQL piped into a DB CLI', command: `echo "DELETE FROM users" | psql`, want: ['DELETE without WHERE'] },
     { name: 'env assignment before the CLI', command: `PGPASSWORD=x psql -c "DROP TABLE t"`, want: ['DROP TABLE'] },
@@ -41,6 +42,20 @@ describe('analyze', () => {
     { name: 'WHERE as a quoted identifier', command: `psql -c 'UPDATE t SET "where" = 1'`, want: ['UPDATE without WHERE'] },
     { name: 'WHERE inside a backslash-escaped string', command: String.raw`mysql -e "UPDATE t SET a = 'x\' WHERE id = 1'"`, want: ['UPDATE without WHERE'] },
     { name: 'multi-table UPDATE', command: `mysql -e "UPDATE a JOIN b ON a.id = b.id SET a.x = 1"`, want: ['UPDATE without WHERE'] },
+    { name: 'command substitution inside echo', command: `echo $(psql -c "DROP TABLE t")`, want: ['DROP TABLE'] },
+    { name: 'backticks inside echo', command: "echo `mysql -e 'TRUNCATE t'`", want: ['TRUNCATE'] },
+    { name: 'process substitution inside grep', command: `grep x <(psql -c "DELETE FROM t")`, want: ['DELETE without WHERE'] },
+    { name: 'rg can run a preprocessor', command: `rg --pre psql "DROP TABLE t"`, want: ['DROP TABLE'] },
+    { name: 'heredoc run by a shell', command: "bash <<'EOF'\npsql -c \"DROP TABLE t\"\nEOF", want: ['DROP TABLE'] },
+    { name: 'heredoc run by ssh', command: "ssh db-host <<'EOF'\nmysql -e 'TRUNCATE t'\nEOF", want: ['TRUNCATE'] },
+    { name: 'heredoc piped into a shell', command: "cat <<'EOF' | bash\npsql -c \"DROP TABLE t\"\nEOF", want: ['DROP TABLE'] },
+    { name: 'unquoted heredoc expands substitutions', command: "cat > out.txt <<EOF\n$(psql -c \"DROP TABLE t\")\nEOF", want: ['DROP TABLE'] },
+    { name: 'backslash before the CLI', command: String.raw`\psql -c "DROP TABLE t"`, want: ['DROP TABLE'] },
+    { name: 'quotes inside the CLI name', command: `ps''ql -c "DROP TABLE t"`, want: ['DROP TABLE'] },
+    { name: 'CLI held in a variable', command: `X=psql; $X -c "DROP TABLE t"`, want: ['DROP TABLE'] },
+    { name: 'heredoc operator right after the CLI', command: "psql<<'EOF'\nTRUNCATE t;\nEOF", want: ['TRUNCATE'] },
+    { name: 'WHERE in a later shell argument', command: `psql -c "UPDATE t SET a = 1" -v x="WHERE"`, want: ['UPDATE without WHERE'] },
+    { name: 'WHERE in a later --command', command: `psql --command="UPDATE t SET a = 1" --command="SELECT 1 WHERE true"`, want: ['UPDATE without WHERE'] },
   ]
   for (const c of cases) {
     test(c.name, async () => {
